@@ -10,3 +10,9 @@ Areum2_can
 
 #log files 
 .log
+# Local executables and generated data
+/areumii_move_pose
+/areumii_udp_shm_bridge
+/datasets/
+/log/
+/outputs/

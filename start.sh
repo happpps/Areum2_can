@@ -6,8 +6,11 @@ LOG_DIR="log"
 
 echo "--- $CAN_INT 인터페이스 초기화 시작 ---"
 
-sudo ip link set ${CAN_INT_0} up type can bitrate ${BITRATE} sample-point ${SAMPLE_POINT}
-sudo ip link set ${CAN_INT_1} up type can bitrate ${BITRATE} sample-point ${SAMPLE_POINT}
+ipcrm -M 13563267
+
+
+sudo ip link set ${CAN_INT_0} up type can bitrate ${BITRATE} sample-point ${SAMPLE_POINT} restart-ms 1
+sudo ip link set ${CAN_INT_1} up type can bitrate ${BITRATE} sample-point ${SAMPLE_POINT} restart-ms 1
 
 
 echo "프로젝트 빌드 상태를 확인합니다..."
