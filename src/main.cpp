@@ -7,12 +7,14 @@
 
 #include <fcntl.h>
 #include <pthread.h>
+#include <chrono>
+#include <array>
 
 
 const char* CAN_INTERFACE_0 = "can0";
 const char* CAN_INTERFACE_1 = "can1";
 bool running = true;
-constexpr long CONTROL_PERIOD = 10'000'000;
+constexpr long CONTROL_PERIOD = 3'000'000;
 constexpr int MaxID = 34;
 constexpr int MOTOR_NUM = 16;
 
@@ -66,6 +68,10 @@ void* CAN_Comm_thread(void* arg) {  // TODO : 캘리브레이션을 위한 로�
     Rx_handler<MaxID> hRx(AReuMii);
     can_frame cf;
     auto& can_interface_vec = *static_cast<std::vector<int>*>(arg);
+    if (can_interface_vec.size() != 2) {
+        std::cerr << "Expected two CAN interfaces.\n";
+        return nullptr;
+    }
 
     for(int s : can_interface_vec){
         while (readframe(s, &cf));
@@ -99,6 +105,10 @@ void* CAN_Comm_thread(void* arg) {  // TODO : 캘리브레이션을 위한 로�
     // constexpr int GRIPPER_VEC_IDX[2] = {VEC_INDEX_LEFT_GRIPPER, VEC_INDEX_RIGHT_GRIPPER};
     // GripperCmd last_gripper[2] = { {NAN,NAN,NAN,NAN,NAN}, {NAN,NAN,NAN,NAN,NAN} };  // 첫 사이클은 무조건 1회 전송
 
+    // Track sustained queue saturation per channel, rather than per motor.
+    using Clock = std::chrono::steady_clock;
+    std::array<Clock::time_point, 2> buffer_full_since{};
+    std::array<unsigned int, 2> restart_attempts{};
     RTC.reset();
     while (running) {
         RTC.wait_next(CONTROL_PERIOD);
@@ -116,14 +126,48 @@ void* CAN_Comm_thread(void* arg) {  // TODO : 캘리브레이션을 위한 로�
 
 
         // 그리퍼를 뺀 나머지 축은 매 주기 전송
-        std::apply([](auto&... vecs) {
-            (..., [](auto& vec) {
+        std::array<bool, 2> buffer_full{};
+        std::apply([&](auto&... vecs) {
+            (..., [&](auto& vec) {
                 for (auto& motor : vec) {
                     //if (motor.can_id == CAN_ID_LEFT_EE || motor.can_id == CAN_ID_RIGHT_EE) continue;
-                    motor.write_updated_operation_frame();
+                    const auto it = std::find(can_interface_vec.begin(), can_interface_vec.end(),
+                                              motor.get_can_interface());
+                    if (it == can_interface_vec.end()) continue;
+                    const auto channel = it - can_interface_vec.begin();
+                    if (buffer_full[channel]) continue;
+                    if (!motor.write_updated_operation_frame() && errno == ENOBUFS) {
+                        buffer_full[channel] = true;
+                    }
                 }
             }(vecs));
         }, AReuMii);
+
+        for (size_t channel = 0; channel < can_interface_vec.size(); ++channel) {
+            if (!buffer_full[channel]) {
+                buffer_full_since[channel] = Clock::time_point{};
+                restart_attempts[channel] = 0;
+                continue;
+            }
+            const auto now = Clock::now();
+            if (buffer_full_since[channel] == Clock::time_point{}) {
+                buffer_full_since[channel] = now;
+            }
+            if (now - buffer_full_since[channel] < std::chrono::milliseconds(100)) continue;
+
+            if (restart_attempts[channel] >= 3) {
+                std::cerr << "CAN channel " << channel << ": recovery failed after 3 attempts; stopping CAN loop.\n";
+                return nullptr;
+            }
+            ++restart_attempts[channel];
+            std::cerr << "CAN channel " << channel << ": ENOBUFS persisted; restarting interface.\n";
+            if (!restart_can(can_interface_vec[channel])) {
+                std::cerr << "CAN restart failed; stopping CAN loop.\n";
+                return nullptr;
+            }
+            buffer_full_since[channel] = Clock::time_point{};
+            RTC.reset();
+        }
 
         // // 그리퍼: 직전 전송값과 다를 때만 전송
         // bool gripper_sent = false;
@@ -413,9 +457,24 @@ int main() {
 
     std::apply([](auto&... vecs) {
         (..., [](auto& vec) {
-            for (auto& motor : vec) motor.init_motor_MIT(10, 10);
+            for (auto& motor : vec){
+                motor.init_motor_MIT(10, 10);
+                motor.stop_motor();
+                usleep(10000);
+            }
         }(vecs));
     }, AReuMii);
+
+    usleep(100000);
+
+    std::apply([](auto&... vecs) {
+        (..., [](auto& vec) {
+            for (auto& motor : vec){
+                motor.init_motor_MIT(10, 10);
+            }
+        }(vecs));
+    }, AReuMii);
+
 
     //여기서 스레드 생성
     pthread_t rt_t, print_t, shm_t;

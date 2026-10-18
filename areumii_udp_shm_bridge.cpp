@@ -511,48 +511,93 @@ int main() {
                 }
 
             } else if (parse_gripper_command(
-                           packet,
-                           gripper_left,
-                           gripper_q
-                       )) {
-                if (!read_ctrl_consistent(shm, ctrl)) {
+                            packet,
+                            gripper_left,
+                            gripper_q
+                        )) {
+            if (!read_ctrl_consistent(shm, ctrl)) {
+                std::cerr
+                    << "[bridge] no consistent control block; "
+                    << "gripper command not written\n";
+            } else {
+                const int index =
+                    gripper_left ? LEFT_GRIPPER : RIGHT_GRIPPER;
+
+                const double q_min = gripper_left
+                    ? LEFT_GRIPPER_OPEN_RAD
+                    : RIGHT_GRIPPER_OPEN_RAD;
+                const double q_max = gripper_left
+                    ? LEFT_GRIPPER_CLOSE_RAD
+                    : RIGHT_GRIPPER_CLOSE_RAD;
+
+                // Clamp the command to the measured real gripper motor range.
+                const double clipped_q =
+                    std::clamp(gripper_q, q_min, q_max);
+
+                if (clipped_q != gripper_q) {
                     std::cerr
-                        << "[bridge] no consistent control block; "
-                        << "gripper command not written\n";
-                } else {
-                    const int index =
-                        gripper_left ? LEFT_GRIPPER : RIGHT_GRIPPER;
-
-                    const double q_min = gripper_left
-                        ? LEFT_GRIPPER_OPEN_RAD
-                        : RIGHT_GRIPPER_OPEN_RAD;
-                    const double q_max = gripper_left
-                        ? LEFT_GRIPPER_CLOSE_RAD
-                        : RIGHT_GRIPPER_CLOSE_RAD;
-
-                    // The Python side already rate-limits the trigger command.
-                    // This bridge adds a hard endpoint guard from the measured
-                    // real gripper motor range.
-                    if (gripper_q < q_min || gripper_q > q_max) {
-                        std::cerr
-                            << "[bridge] "
-                            << (gripper_left ? "LEFT" : "RIGHT")
-                            << " gripper command outside measured range: "
-                            << gripper_q
-                            << " not in [" << q_min << ", " << q_max
-                            << "] rad; dropped\n";
-                    } else {
-                        ctrl[index].pos = gripper_q;
-                        ctrl[index].vel = 0.0;
-                        shm->write_ctrl(ctrl);
-                    }
+                        << "[bridge] "
+                        << (gripper_left ? "LEFT" : "RIGHT")
+                        << " gripper command clipped: "
+                        << gripper_q
+                        << " -> " << clipped_q
+                        << " rad\n";
                 }
 
-            } else {
-                std::cerr
-                    << "[bridge] malformed command dropped: "
-                    << packet << "\n";
+                ctrl[index].pos = clipped_q;
+                ctrl[index].vel = 0.0;
+                shm->write_ctrl(ctrl);
             }
+
+        } else {
+            std::cerr
+                << "[bridge] malformed command dropped: "
+                << packet << "\n";
+        }
+
+            // } else if (parse_gripper_command(
+            //                packet,
+            //                gripper_left,
+            //                gripper_q
+            //            )) {
+            //     if (!read_ctrl_consistent(shm, ctrl)) {
+            //         std::cerr
+            //             << "[bridge] no consistent control block; "
+            //             << "gripper command not written\n";
+            //     } else {
+            //         const int index =
+            //             gripper_left ? LEFT_GRIPPER : RIGHT_GRIPPER;
+
+            //         const double q_min = gripper_left
+            //             ? LEFT_GRIPPER_OPEN_RAD
+            //             : RIGHT_GRIPPER_OPEN_RAD;
+            //         const double q_max = gripper_left
+            //             ? LEFT_GRIPPER_CLOSE_RAD
+            //             : RIGHT_GRIPPER_CLOSE_RAD;
+
+            //         // The Python side already rate-limits the trigger command.
+            //         // This bridge adds a hard endpoint guard from the measured
+            //         // real gripper motor range.
+            //         if (gripper_q < q_min || gripper_q > q_max) {
+            //             std::cerr
+            //                 << "[bridge] "
+            //                 << (gripper_left ? "LEFT" : "RIGHT")
+            //                 << " gripper command outside measured range: "
+            //                 << gripper_q
+            //                 << " not in [" << q_min << ", " << q_max
+            //                 << "] rad; dropped\n";
+            //         } else {
+            //             ctrl[index].pos = gripper_q;
+            //             ctrl[index].vel = 0.0;
+            //             shm->write_ctrl(ctrl);
+            //         }
+            //     }
+
+            // } else {
+            //     std::cerr
+            //         << "[bridge] malformed command dropped: "
+            //         << packet << "\n";
+            // }
 
         } else if (
             n < 0 &&

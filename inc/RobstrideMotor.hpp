@@ -2,6 +2,7 @@
 #define ROBSTRIDEMOTOR_HPP
 
 #include <stdint.h>
+#include <cerrno>
 #include <stdlib.h>
 #include <string>
 #include <cstring>
@@ -198,6 +199,8 @@ class RobstrideMotor {
         can_interface(can_interface) ,can_id(can_id) {
     }
 
+    int get_can_interface() const { return can_interface; }
+
     void calibrate(double expected = 0.0) {
         double diff = Feedback_param.pos.load(std::memory_order_relaxed) - expected;
         pos_offset = -std::round(diff / (2*M_PI)) * (2*M_PI);
@@ -235,8 +238,15 @@ class RobstrideMotor {
             memset(frame.data, 0, 8);
         }
     
-        if (write(can_interface, &frame, sizeof(struct can_frame)) != sizeof(struct can_frame)) {
-            perror("write");
+        const ssize_t written = write(can_interface, &frame, sizeof(struct can_frame));
+        if (written != sizeof(struct can_frame)) {
+            const int error = written < 0 ? errno : EIO;
+            // ENOBUFS is handled once per CAN channel in CAN_Comm_thread.
+            if (error != ENOBUFS) {
+                errno = error;
+                perror("write");
+            }
+            errno = error;
             return false;
         }
         return true;
@@ -465,5 +475,7 @@ bool readframe(int s, struct can_frame* frame);  // 이 이름으로 프레임 �
                                                 //아마 읽어오는 클래스를 하나 만드는게 좋을듯
 
 
+
+bool restart_can(int s);
 
 #endif
